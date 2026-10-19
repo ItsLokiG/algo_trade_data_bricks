@@ -1,0 +1,31 @@
+# NSE Algorithmic Trading Research System
+# Core dependencies (portable, no Databricks-specific packages)
+
+# Data manipulation and computation
+pandas>=2.0
+numpy>=1.24
+
+# Technical indicators (future use — not yet imported)
+# ta>=0.10.0
+
+# Plotting
+matplotlib>=3.7
+
+# Testing
+pytest>=8.0
+
+# Market data (optional — yfinance is an unofficial source, not exchange-quality)
+# Install only when internet access is available:
+#   pip install yfinance>=0.2.30
+
+# Local storage (future portability to VS Code)
+# duckdb>=0.10
+
+# MLflow (optional, for experiment tracking when supported)
+# mlflow>=2.0
+
+# ──────────────────────────────────────────────
+# Databricks-specific (installed in Databricks runtime, do NOT pip install there)
+# ──────────────────────────────────────────────
+# pyspark
+# delta-spark
