@@ -6,8 +6,13 @@ This keeps strategy logic portable to VS Code.
 
 Implemented:
   - SMA (Simple Moving Average)
+  - EMA (Exponential Moving Average)
   - RSI (Relative Strength Index, Wilder's smoothing)
   - ATR (Average True Range, Wilder's smoothing)
+  - MACD (Moving Average Convergence Divergence)
+  - ADX (Average Directional Index, trend strength)
+  - Bollinger Bands (volatility envelope)
+  - Stochastic Oscillator
   - Volume average and ratio
   - Momentum / return over a lookback window
   - Relative strength vs benchmark
@@ -115,6 +120,131 @@ def atr(
 
 
 # ──────────────────────────────────────────────
+#  MACD (Moving Average Convergence Divergence)
+# ──────────────────────────────────────────────
+
+def macd(
+    close: pd.Series,
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """MACD line, signal line, and histogram.
+
+    Returns (macd_line, signal_line, histogram).
+    MACD line = EMA(fast) - EMA(slow).
+    Signal line = EMA(MACD, signal).
+    Histogram = MACD - Signal.
+    """
+    ema_fast = ema(close, fast)
+    ema_slow = ema(close, slow)
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False, min_periods=signal).mean()
+    histogram = macd_line - signal_line
+    return macd_line, signal_line, histogram
+
+
+# ──────────────────────────────────────────────
+#  ADX (Average Directional Index)
+# ──────────────────────────────────────────────
+
+def adx(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    period: int = 14,
+) -> pd.Series:
+    """Average Directional Index — trend strength indicator.
+
+    ADX > 25 indicates a strong trend.
+    Returns NaN for the first ``period * 2`` bars.
+    """
+    if period < 1:
+        raise ValueError(f"period must be >= 1, got {period}")
+
+    prev_high = high.shift(1)
+    prev_low = low.shift(1)
+
+    up_move = high - prev_high
+    down_move = prev_low - low
+
+    plus_dm = pd.Series(
+        np.where((up_move > down_move) & (up_move > 0), up_move, 0.0),
+        index=high.index, dtype=float,
+    )
+    minus_dm = pd.Series(
+        np.where((down_move > up_move) & (down_move > 0), down_move, 0.0),
+        index=high.index, dtype=float,
+    )
+
+    # True Range
+    prev_close = close.shift(1)
+    tr1 = high - low
+    tr2 = (high - prev_close).abs()
+    tr3 = (low - prev_close).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    # Wilder's smoothing
+    atr_val = tr.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+    plus_dm_s = plus_dm.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+    minus_dm_s = minus_dm.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+
+    plus_di = 100 * plus_dm_s / atr_val.replace(0.0, np.nan)
+    minus_di = 100 * minus_dm_s / atr_val.replace(0.0, np.nan)
+
+    di_sum = (plus_di + minus_di).replace(0.0, np.nan)
+    dx = 100 * (plus_di - minus_di).abs() / di_sum
+    adx_val = dx.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+
+    return adx_val
+
+
+# ──────────────────────────────────────────────
+#  Bollinger Bands
+# ──────────────────────────────────────────────
+
+def bollinger_bands(
+    close: pd.Series,
+    period: int = 20,
+    std_dev: float = 2.0,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Bollinger Bands.
+
+    Returns (upper_band, middle_band, lower_band).
+    Middle = SMA(period), Upper/Lower = Middle ± std_dev * rolling_std.
+    """
+    middle = sma(close, period)
+    std = close.rolling(window=period, min_periods=period).std()
+    upper = middle + std_dev * std
+    lower = middle - std_dev * std
+    return upper, middle, lower
+
+
+# ──────────────────────────────────────────────
+#  Stochastic Oscillator
+# ──────────────────────────────────────────────
+
+def stochastic(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    k_period: int = 14,
+    d_period: int = 3,
+) -> tuple[pd.Series, pd.Series]:
+    """Stochastic Oscillator.
+
+    Returns (%K, %D).
+    %K = 100 * (close - lowest_low) / (highest_high - lowest_low)
+    %D = SMA(%K, d_period)
+    """
+    lowest_low = low.rolling(window=k_period, min_periods=k_period).min()
+    highest_high = high.rolling(window=k_period, min_periods=k_period).max()
+    k = 100 * (close - lowest_low) / (highest_high - lowest_low).replace(0.0, np.nan)
+    d = k.rolling(window=d_period, min_periods=d_period).mean()
+    return k, d
+
+
+# ──────────────────────────────────────────────
 #  Volume indicators
 # ──────────────────────────────────────────────
 
@@ -195,6 +325,25 @@ def add_all_indicators(
     result["ind_volume_sma"] = volume_sma(result["volume"], volume_avg_period)
     result["ind_volume_ratio"] = volume_ratio(result["volume"], volume_avg_period)
     result["ind_momentum"] = momentum(result["close"], momentum_period)
+
+    # MACD
+    macd_line, macd_signal, macd_hist = macd(result["close"])
+    result["ind_macd"] = macd_line
+    result["ind_macd_signal"] = macd_signal
+    result["ind_macd_hist"] = macd_hist
+
+    # ADX
+    result["ind_adx"] = adx(result["high"], result["low"], result["close"], 14)
+
+    # Bollinger Bands
+    bb_upper, bb_middle, bb_lower = bollinger_bands(result["close"])
+    result["ind_bb_upper"] = bb_upper
+    result["ind_bb_lower"] = bb_lower
+
+    # Stochastic
+    k, d = stochastic(result["high"], result["low"], result["close"])
+    result["ind_stoch_k"] = k
+    result["ind_stoch_d"] = d
 
     if benchmark_close is not None:
         result["ind_rel_strength"] = relative_strength(

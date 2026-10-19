@@ -37,9 +37,13 @@ import numpy as np
 import pandas as pd
 
 from nse_algo.features.indicators import (
+    adx,
     atr,
+    bollinger_bands,
+    macd,
     rsi,
     sma,
+    stochastic,
     volume_ratio,
 )
 
@@ -65,6 +69,22 @@ class SignalConfig:
     atr_period: int = 14
     stop_atr_multiple: float = 2.0
     trailing_stop_atr_multiple: float = 2.0
+    # MACD filter (disabled by default for backward compatibility)
+    macd_enabled: bool = False
+    macd_fast: int = 12
+    macd_slow: int = 26
+    macd_signal: int = 9
+    # ADX trend strength filter (disabled by default)
+    adx_enabled: bool = False
+    adx_period: int = 14
+    adx_threshold: float = 25.0
+    # Bollinger Band profit target (disabled by default)
+    bollinger_enabled: bool = False
+    bollinger_period: int = 20
+    bollinger_std: float = 2.0
+    # Stochastic filter (disabled by default)
+    stoch_enabled: bool = False
+    stoch_k_threshold: float = 50.0
 
 
 def generate_entry_signals(
@@ -106,8 +126,34 @@ def generate_entry_signals(
     # Condition 5: Volume confirmation
     volume_ok = vol_ratio >= cfg.min_volume_ratio
 
+    # Condition 6: MACD bullish (histogram > 0) — momentum confirmation
+    if cfg.macd_enabled:
+        macd_line, macd_signal, macd_hist = macd(
+            close, cfg.macd_fast, cfg.macd_slow, cfg.macd_signal
+        )
+        macd_bullish = macd_hist > 0
+    else:
+        macd_bullish = pd.Series(True, index=df.index)
+
+    # Condition 7: ADX above threshold — strong trend
+    if cfg.adx_enabled:
+        adx_val = adx(high, low, close, cfg.adx_period)
+        adx_strong = adx_val >= cfg.adx_threshold
+    else:
+        adx_strong = pd.Series(True, index=df.index)
+
+    # Condition 8: Stochastic not overbought
+    if cfg.stoch_enabled:
+        stoch_k, stoch_d = stochastic(high, low, close)
+        stoch_ok = stoch_k < cfg.stoch_k_threshold
+    else:
+        stoch_ok = pd.Series(True, index=df.index)
+
     # All conditions must be true
-    entry = uptrend & trend_confirm & rsi_was_oversold & rsi_renewed & volume_ok
+    entry = (
+        uptrend & trend_confirm & rsi_was_oversold & rsi_renewed
+        & volume_ok & macd_bullish & adx_strong & stoch_ok
+    )
 
     # Don't signal on the first sma_long_period bars (not enough data)
     entry.iloc[:cfg.sma_long_period] = False
@@ -141,19 +187,29 @@ def generate_exit_signals(
     cfg = config or SignalConfig()
     close = df["close"]
     low = df["low"]
+    high = df["high"]
 
     sma_s = sma(close, cfg.sma_short_period)
 
     # Trend-break exit
     trend_break = close < sma_s
 
+    # Bollinger Band profit target exit (close >= upper band)
+    if cfg.bollinger_enabled:
+        bb_upper, bb_middle, bb_lower = bollinger_bands(
+            close, cfg.bollinger_period, cfg.bollinger_std
+        )
+        bb_exit = close >= bb_upper
+    else:
+        bb_exit = pd.Series(False, index=df.index)
+
     # Stop-loss exit
     if entry_price is not None and entry_atr is not None:
         stop_price = entry_price - (entry_atr * cfg.stop_atr_multiple)
         stop_hit = low <= stop_price
-        exit_signal = trend_break | stop_hit
+        exit_signal = trend_break | stop_hit | bb_exit
     else:
-        exit_signal = trend_break
+        exit_signal = trend_break | bb_exit
 
     # Don't exit before we have enough data for SMA
     exit_signal.iloc[:cfg.sma_short_period] = False

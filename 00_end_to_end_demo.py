@@ -1,4 +1,11 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# dependencies = [
+#   "yfinance",
+# ]
+# ///
 # DBTITLE 1,NSE Algo Trading — End-to-End Demo
 # MAGIC %md
 # MAGIC """
@@ -51,7 +58,10 @@ import numpy as np
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-from nse_algo.config import ProjectConfig, get_config
+from nse_algo.config import (
+    ProjectConfig, get_config,
+    StrategyConfig, RiskConfig, CostConfig, DataConfig,
+)
 from nse_algo.data.providers import get_provider, YFinanceProvider, SyntheticProvider
 from nse_algo.features.indicators import add_all_indicators
 from nse_algo.strategy.signals import SignalConfig, generate_all_signals, SignalType
@@ -67,13 +77,55 @@ from nse_algo.paper.engine import PaperEngine
 
 print("✅ All nse_algo modules imported successfully")
 
-# Build the project configuration
-cfg = get_config(phase=10)
+# Build the project configuration with improved strategy parameters
+strategy_cfg = StrategyConfig(
+    sma_short_period=20,        # faster trend detection (was 50)
+    sma_long_period=50,         # faster trend confirmation (was 200)
+    rsi_period=14,
+    rsi_oversold=35.0,          # wider pullback window (was 40)
+    rsi_renewed=50.0,           # earlier momentum resumption (was 55)
+    atr_period=14,
+    min_volume_multiplier=0.8,  # accept slightly below-avg volume (was 1.5)
+)
+
+risk_cfg = RiskConfig(
+    risk_per_trade=0.01,            # 1% risk per trade (was 0.5%)
+    max_risk_per_trade=0.02,
+    max_positions=5,                # concentrate on top picks (was 10)
+    default_stop_atr_multiple=1.5,  # tighter stop (was 2.0)
+    trailing_stop_atr_multiple=1.5, # tighter trailing (was 2.0)
+    trailing_stop_enabled=True,
+)
+
+# Expand stock universe from 10 to 25 liquid NSE stocks
+data_cfg = DataConfig(
+    universe=(
+        # Original 10 large-caps
+        "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
+        "HINDUNILVR", "SBIN", "BHARTIARTL", "ITC", "KOTAKBANK",
+        # 15 additional large/mid-caps
+        "LT", "AXISBANK", "WIPRO", "BAJFINANCE", "MARUTI",
+        "ASIANPAINT", "HCLTECH", "SUNPHARMA", "TATACONSUM", "TATASTEEL",
+        "ULTRACEMCO", "NESTLEIND", "POWERGRID", "NTPC", "ONGC",
+        "ADANIENT", "M&M", "DLF", "JSWSTEEL", "COALINDIA",
+    ),
+)
+
+cfg = ProjectConfig(
+    phase=10,
+    strategy=strategy_cfg,
+    risk=risk_cfg,
+    data=data_cfg,
+)
+
 print(f"Project: {cfg.project_name} v{cfg.version}, Phase {cfg.phase}")
 print(f"Universe: {cfg.data.universe}")
 print(f"Initial capital: ₹{cfg.capital.initial_capital:,.0f}")
 print(f"Risk per trade: {cfg.risk.risk_per_trade:.1%}")
 print(f"Max positions: {cfg.risk.max_positions}")
+print(f"SMA: {cfg.strategy.sma_short_period}/{cfg.strategy.sma_long_period}")
+print(f"RSI: oversold={cfg.strategy.rsi_oversold}, renewed={cfg.strategy.rsi_renewed}")
+print(f"Stop ATR: {cfg.risk.default_stop_atr_multiple}x, Trailing: {cfg.risk.trailing_stop_atr_multiple}x")
 print(f"Cost rates verified: {cfg.costs.rates_verified}")
 
 # COMMAND ----------
@@ -238,9 +290,19 @@ sig_cfg = SignalConfig(
     rsi_period=cfg.strategy.rsi_period,
     rsi_oversold=cfg.strategy.rsi_oversold,
     rsi_renewed=cfg.strategy.rsi_renewed,
+    rsi_lookback=15,
+    min_volume_ratio=cfg.strategy.min_volume_multiplier,
     atr_period=cfg.strategy.atr_period,
     stop_atr_multiple=cfg.risk.default_stop_atr_multiple,
     trailing_stop_atr_multiple=cfg.risk.trailing_stop_atr_multiple,
+    # Technical analysis indicators (computed for analysis, not used as entry filters)
+    # MACD, ADX, Bollinger, Stochastic are displayed in the indicators cell
+    # but not used as entry/exit filters — the base RSI pullback strategy
+    # with SMA 20/50 trend confirmation is sufficient and more robust
+    macd_enabled=False,       # MACD filter too restrictive in sequential backtest
+    adx_enabled=False,        # ADX filter too restrictive with MACD
+    bollinger_enabled=False,  # Cuts profits too short
+    stoch_enabled=False,      # Redundant with RSI filter
 )
 
 signal_data: dict[str, pd.DataFrame] = {}
@@ -325,6 +387,82 @@ if not trade_table.empty:
     display(trade_table.head(10))
 else:
     print("\nNo trades executed — signals may be rare with synthetic data.")
+
+# COMMAND ----------
+
+# DBTITLE 1,Detailed Trade Analysis
+# ─── Detailed Trade-by-Trade Investment Analysis ───
+trade_records = []
+for i, t in enumerate(result.trades, 1):
+    investment = t.entry_price * t.quantity
+    exit_value = t.exit_price * t.quantity
+    net_pnl = t.pnl
+    roi_pct = t.pnl_pct * 100
+    trade_records.append({
+        "#": i,
+        "Symbol": t.symbol,
+        "Entry Date": t.entry_date.strftime("%Y-%m-%d"),
+        "Exit Date": t.exit_date.strftime("%Y-%m-%d"),
+        "Entry Price": f"₹{t.entry_price:,.2f}",
+        "Exit Price": f"₹{t.exit_price:,.2f}",
+        "Qty": t.quantity,
+        "Investment": f"₹{investment:,.0f}",
+        "Exit Value": f"₹{exit_value:,.0f}",
+        "P&L": f"₹{net_pnl:,.0f}",
+        "ROI %": f"{roi_pct:+.2f}%",
+        "Costs": f"₹{t.costs:,.0f}",
+        "Exit Reason": t.exit_reason.value,
+        "Holding Days": t.holding_days,
+    })
+
+trades_df = pd.DataFrame(trade_records)
+print("═" * 80)
+print("  TRADE-BY-TRADE INVESTMENT ANALYSIS")
+print("═" * 80)
+display(trades_df)
+
+# ─── Summary Statistics ───
+print("\n" + "─" * 60)
+print("  PORTFOLIO SUMMARY")
+print("─" * 60)
+print(f"  Total Trades:           {result.n_trades}")
+print(f"  Winning Trades:         {result.n_winning} ({result.n_winning/result.n_trades:.1%})")
+print(f"  Losing Trades:          {result.n_losing} ({result.n_losing/result.n_trades:.1%})")
+print(f"  Initial Capital:        ₹{result.initial_capital:,.0f}")
+print(f"  Final Equity:           ₹{result.final_equity:,.0f}")
+print(f"  Net P&L:                ₹{result.final_equity - result.initial_capital:,.0f}")
+print(f"  Total Return:           {result.total_return:.2%}")
+
+# Per-stock breakdown
+print("\n" + "─" * 60)
+print("  PER-STOCK PERFORMANCE")
+print("─" * 60)
+stock_pnl = {}
+for t in result.trades:
+    if t.symbol not in stock_pnl:
+        stock_pnl[t.symbol] = {"trades": 0, "pnl": 0.0, "wins": 0}
+    stock_pnl[t.symbol]["trades"] += 1
+    stock_pnl[t.symbol]["pnl"] += t.pnl
+    if t.pnl > 0:
+        stock_pnl[t.symbol]["wins"] += 1
+
+stock_summary = []
+for sym, data in sorted(stock_pnl.items(), key=lambda x: x[1]["pnl"], reverse=True):
+    stock_summary.append({
+        "Symbol": sym,
+        "Trades": data["trades"],
+        "Wins": data["wins"],
+        "Win Rate": f"{data['wins']/data['trades']:.0%}",
+        "Total P&L": f"₹{data['pnl']:,.0f}",
+    })
+display(pd.DataFrame(stock_summary))
+
+# Best and worst trades
+best_trade = max(result.trades, key=lambda t: t.pnl)
+worst_trade = min(result.trades, key=lambda t: t.pnl)
+print(f"\n  🏆 Best Trade:  {best_trade.symbol} → ₹{best_trade.pnl:,.0f} ({best_trade.pnl_pct:+.2%})")
+print(f"  💥 Worst Trade: {worst_trade.symbol} → ₹{worst_trade.pnl:,.0f} ({worst_trade.pnl_pct:+.2%})")
+print(f"  ⏱  Avg Holding: {sum(t.holding_days for t in result.trades)/len(result.trades):.1f} bars")
 
 # COMMAND ----------
 

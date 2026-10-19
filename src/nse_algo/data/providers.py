@@ -120,7 +120,7 @@ to be exchange-quality.  Use only for prototyping.
                 yf_symbol,
                 start=start_date,
                 end=end_date,
-                auto_adjust=False,
+                auto_adjust=True,
                 progress=False,
             )
         except Exception as exc:
@@ -133,7 +133,10 @@ to be exchange-quality.  Use only for prototyping.
             )
 
         # Normalise column names to lowercase
-        df.columns = [c.lower().strip() for c in df.columns]
+        # Handle yfinance MultiIndex (yfinance >= 1.7.0 returns (Price, Ticker) tuples)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df.columns = [str(c).lower().strip() for c in df.columns]
 
         # Keep only OHLCV columns
         required = {"open", "high", "low", "close", "volume"}
