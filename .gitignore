@@ -64,3 +64,6 @@ Thumbs.db
 # MLflow
 mlruns/
 mlartifacts/
+
+# Paper trading state (runtime, not code)
+*_paper_trade_state.json

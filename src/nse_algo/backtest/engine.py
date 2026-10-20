@@ -171,7 +171,14 @@ def run_backtest(
     # Generate signals for each symbol
     signal_data: dict[str, pd.DataFrame] = {}
     for symbol, df in data.items():
-        signal_data[symbol] = generate_all_signals(df, sig_cfg)
+        sig_df = generate_all_signals(df, sig_cfg)
+        # Shift signals by 1 bar to eliminate look-ahead bias.
+        # A signal computed from the close of day T is only
+        # actionable at the open of day T+1.
+        sig_df["signal_entry"] = sig_df["signal_entry"].shift(1).fillna(False)
+        sig_df["signal_exit"] = sig_df["signal_exit"].shift(1).fillna(False)
+        sig_df["proposed_stop"] = sig_df["proposed_stop"].shift(1)
+        signal_data[symbol] = sig_df
 
     # Collect all trading dates
     all_dates: pd.DatetimeIndex = pd.DatetimeIndex([])
@@ -210,10 +217,10 @@ def run_backtest(
             exit_reason: ExitReason | None = None
             exit_price = 0.0
 
-            # Signal exit (close < SMA short)
+            # Signal exit (shifted: from prior day's close < SMA short)
             if row.get("signal_exit", False):
                 exit_reason = ExitReason.SIGNAL_EXIT
-                exit_price = row["open"]  # fill at next open (this bar)
+                exit_price = row["open"]  # fill at today's open (signal from prior close)
 
             # Stop-loss check (low <= stop)
             elif pos.stop_price > 0 and row["low"] <= pos.stop_price:
@@ -317,8 +324,8 @@ def run_backtest(
                 if positions[symbol].is_open:
                     continue  # already holding
 
-                # Next bar's open is the fill price
-                # For simplicity, we fill at the current bar's open (signal from prior close)
+                # Signal was shifted by 1 bar — it's from the prior day's close.
+                # Fill at today's open (correct: signal is known before today's open).
                 fill_price = row["open"]
                 if fill_price <= 0:
                     continue

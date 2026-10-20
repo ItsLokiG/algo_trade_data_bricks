@@ -1,12 +1,12 @@
 # NSE Algorithmic Trading Research System
 
-A portable, testable algorithmic trading research platform for **NSE cash-equity swing trading** on daily bars.
+A portable, testable algorithmic trading research platform for **NSE cash-equity swing trading** on daily and weekly bars.
 
 **Profitability is a hypothesis to test, not an assumption or guarantee.**
 
 ## Current Phase
 
-**Phases 1–9 complete. 197 tests passing.**
+**Phases 1–9 complete (197 tests). Two active swing trading strategies deployed in paper trading.**
 
 See the [development workflow](#development-phases) below for the full roadmap.
 
@@ -14,6 +14,8 @@ See the [development workflow](#development-phases) below for the full roadmap.
 
 ```
 algo_trade_data_bricks/
+├── Advanced ML Stock Selection NIFTY 200.py   # Weekly swing strategy (4-week hold)
+├── Daily Swing 10-Day NIFTY 500.py            # Daily swing strategy (10-day hold)
 ├── src/
 │   └── nse_algo/
 │       ├── __init__.py             # Package init, v0.1.0
@@ -105,6 +107,44 @@ with validation. Key defaults:
 
 > **Cost rates are research defaults and MUST be verified against authoritative
 > sources before any live-use calculation.**
+
+## Active Trading Strategies
+
+### 1. Weekly Swing — Advanced ML Stock Selection NIFTY 200
+
+| Metric | Weekly Swing | NIFTY 50 |
+|---|---|---|
+| Total Return (3.5y) | 96.8% | 25.7% |
+| CAGR | 21.6% | 6.8% |
+| Sharpe | 1.60 | 0.61 |
+| Max Drawdown | -12.3% | -15.5% |
+| Win Rate | 61.5% | — |
+| Profit Factor | 2.16 | — |
+| Trades | 504 | — |
+| Avg Hold | 3.8 weeks | — |
+
+130 NIFTY 200 stocks, 53 features (technical + Google News RSS sentiment + Screener.in fundamentals), LightGBM, NIFTY regime filter (weekly SMA40), ATR stops 1.5x, targets 3x.
+
+### 2. Daily Swing — 10-Day Max Holding NIFTY 500
+
+| Metric | Daily Swing | NIFTY 50 |
+|---|---|---|
+| Total Return (3.4y) | 71.4% | 27.8% |
+| CAGR | 17.1% | 7.4% |
+| Sharpe | 1.39 | 0.62 |
+| Max Drawdown | -13.5% | -15.8% |
+| Win Rate | 51.5% | — |
+| Profit Factor | 1.32 | — |
+| Trades | 1,204 | — |
+| Avg Hold | 6.1 days | — |
+
+224 stocks (large + midcap), 37 features, LightGBM, 10-day triple-barrier, NIFTY regime (daily SMA50), ATR stops 1.5x, targets 2x, daily rebalancing.
+
+### Paper Trading
+
+Both strategies have paper trading with JSON state persistence (gitignored):
+- Weekly: run every Friday
+- Daily: run daily after market close
 
 ## Running Tests
 
