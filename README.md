@@ -6,7 +6,7 @@ A portable, testable algorithmic trading research platform for **NSE cash-equity
 
 ## Current Phase
 
-**Phases 1–9 complete (197 tests). Two active swing trading strategies deployed in paper trading.**
+**Research prototype:** core modules and 204 tests are available. Strategy profitability has not been established; the legacy strategy notebooks and their historical performance figures are not validated for trading decisions.
 
 See the [development workflow](#development-phases) below for the full roadmap.
 
@@ -52,9 +52,9 @@ algo_trade_data_bricks/
 │   ├── test_validation.py          # 25 tests — providers + data quality
 │   ├── test_indicators.py          # 26 tests — technical indicators
 │   ├── test_signals.py             # 21 tests — signals + ranking
-│   ├── test_backtest.py            # 27 tests — costs + backtest engine
+│   ├── test_backtest.py            # 29 tests — costs + backtest engine
 │   ├── test_metrics.py             # 36 tests — metrics + robustness
-│   ├── test_paper.py               # 17 tests — paper DB + engine
+│   ├── test_paper.py               # 19 tests — paper DB + engine
 │   └── test_reporting.py           # 13 tests — reporting + monitoring
 ├── README.md
 ├── .gitignore
@@ -108,43 +108,70 @@ with validation. Key defaults:
 > **Cost rates are research defaults and MUST be verified against authoritative
 > sources before any live-use calculation.**
 
-## Active Trading Strategies
+## Candidate Strategies (Unverified)
 
-### 1. Weekly Swing — Advanced ML Stock Selection NIFTY 200
+The two Databricks notebooks are research prototypes, not verified profitable
+strategies. Their previously displayed headline returns have been removed:
+the backtests use same-bar closing prices for some decisions, the ML test
+period is used for early stopping, the weekly model applies current
+fundamentals to historical observations, and trading costs are not fully
+modeled. Those results should not be used as evidence of an edge.
 
-| Metric | Weekly Swing | NIFTY 50 |
-|---|---|---|
-| Total Return (3.5y) | 96.8% | 25.7% |
-| CAGR | 21.6% | 6.8% |
-| Sharpe | 1.60 | 0.61 |
-| Max Drawdown | -12.3% | -15.5% |
-| Win Rate | 61.5% | — |
-| Profit Factor | 2.16 | — |
-| Trades | 504 | — |
-| Avg Hold | 3.8 weeks | — |
+### Weekly Swing — Advanced ML Stock Selection NIFTY 200
 
-130 NIFTY 200 stocks, 53 features (technical + Google News RSS sentiment + Screener.in fundamentals), LightGBM, NIFTY regime filter (weekly SMA40), ATR stops 1.5x, targets 3x.
+Research design: weekly stock selection, technical/cross-sectional features,
+LightGBM, a NIFTY regime filter, and ATR-based exits. The notebook requires
+point-in-time data and an execution-aware out-of-sample rebuild before
+performance can be assessed.
 
-### 2. Daily Swing — 10-Day Max Holding NIFTY 500
+### Daily Swing — 10-Day Max Holding NIFTY 500
 
-| Metric | Daily Swing | NIFTY 50 |
-|---|---|---|
-| Total Return (3.4y) | 71.4% | 27.8% |
-| CAGR | 17.1% | 7.4% |
-| Sharpe | 1.39 | 0.62 |
-| Max Drawdown | -13.5% | -15.8% |
-| Win Rate | 51.5% | — |
-| Profit Factor | 1.32 | — |
-| Trades | 1,204 | — |
-| Avg Hold | 6.1 days | — |
-
-224 stocks (large + midcap), 37 features, LightGBM, 10-day triple-barrier, NIFTY regime (daily SMA50), ATR stops 1.5x, targets 2x, daily rebalancing.
+Research design: daily stock selection, technical/cross-sectional features,
+LightGBM, a NIFTY regime filter, and ATR-based exits. The notebook requires
+execution-aware signals, leakage-safe model selection, and full transaction
+cost modeling before its backtest can support a conclusion.
 
 ### Paper Trading
 
-Both strategies have paper trading with JSON state persistence (gitignored):
-- Weekly: run every Friday
-- Daily: run daily after market close
+The notebook/dashboard simulations do not submit broker orders. The reusable
+Python paper engine is separate and simulates close-based signals at the next
+session's open. Its corrected execution/accounting behavior is covered by
+tests, but this is not evidence that either candidate strategy is profitable.
+
+### Market-data MCP (optional)
+
+The VS Code workspace includes an optional Tapetide MCP connection in
+`.vscode/mcp.json`. It uses the pinned Python bridge (`tapetide-mcp` 1.0.1)
+through `uvx`, and can provide NSE/BSE quotes, financials, technical
+screening, daily/weekly price history, and point-in-time/corporate-action
+lookup tools to an MCP-compatible assistant. On first use, VS Code prompts
+for a Tapetide token; it is not stored in this repository. The configured
+MCP package sends requests and that token to Tapetide's remote service.
+
+This is a third-party research/data service, not an official NSE/BSE feed.
+The pinned bridge forwards MCP requests to its remote service, so queries
+and the token are sent to Tapetide. Do not send brokerage credentials,
+personal data, or strategy information you consider confidential. Its
+advertised historical coverage and point-in-time tools still need independent
+validation before use in performance claims. The MCP connection is for
+assistant research only; it is **not** wired as a Python backtest provider,
+does not submit orders, and does not by itself establish profitability.
+For reproducible backtests, persist the exact historical data used, its
+retrieval time, adjustment factors, instrument identifiers, and historical
+index membership alongside each run. Review the provider's current data
+licensing, methodology, and usage limits before relying on it.
+
+Use only the optional MCP you have explicitly reviewed; installing multiple
+Claude/Codex MCPs does not improve the evidence quality. For authorized
+historical OHLCV, prefer a licensed exchange or broker feed and independently
+validate its corrections and adjustment policy. For fundamental inputs, use
+dated exchange filings or a licensed point-in-time dataset. See
+[Financial-analysis methodology](docs/financial-analysis.md) and
+[Security policy](SECURITY.md).
+
+The bridge is not a substitute for the local backtest engine. Do not treat
+assistant-generated calculations, MCP screening output, or vendor claims as
+audited financial statements or validated strategy results.
 
 ## Running Tests
 

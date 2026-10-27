@@ -196,7 +196,10 @@ class SyntheticProvider(DataProvider):
         start_date: str,
         end_date: str | None = None,
     ) -> pd.DataFrame:
-        rng = np.random.default_rng(self._seed + hash(symbol) % 100000)
+        symbol_seed = int.from_bytes(
+            hashlib.sha256(symbol.encode("utf-8")).digest()[:8], byteorder="big"
+        )
+        rng = np.random.default_rng(self._seed + symbol_seed)
 
         dates = pd.bdate_range(start=start_date, end=end_date or pd.Timestamp.today())
         n = len(dates)

@@ -3,9 +3,11 @@
 # MAGIC %md
 # MAGIC # Daily Swing Strategy — 10-Day Max Holding | NIFTY 500
 # MAGIC
+# MAGIC > **Research prototype only:** the legacy performance estimates are not validated. Same-close execution, test-set early stopping, and incomplete cost modeling invalidate the existing performance claims. Do not use these results as evidence of profitability.
+# MAGIC
 # MAGIC ## Strategy Overview
 # MAGIC
-# MAGIC **Goal**: Maximum profitability short-term swing trading on daily bars with 1-10 day holding period.
+# MAGIC **Research hypothesis**: Short-term swing trading on daily bars with a 1-10 day holding period may outperform a benchmark after costs.
 # MAGIC
 # MAGIC ### Key Differences from Weekly Strategy
 # MAGIC | Component | Weekly (Existing) | Daily (This Notebook) |

@@ -215,3 +215,125 @@ class TestBacktestEngine:
         # total_return = final/initial - 1
         expected = (result.final_equity / result.initial_capital) - 1.0
         assert np.isclose(result.total_return, expected, rtol=1e-6)
+
+    def test_trade_costs_include_both_sides_and_atr_is_lagged(self, monkeypatch) -> None:
+        dates = pd.bdate_range("2024-01-02", periods=3)
+        bars = pd.DataFrame(
+            {
+                "open": [100.0, 100.0, 102.0],
+                "high": [101.0, 110.0, 112.0],
+                "low": [99.0, 99.0, 100.0],
+                "close": [100.0, 105.0, 110.0],
+                "volume": [1000, 1000, 1000],
+            },
+            index=dates,
+        )
+
+        def fake_signals(df, config):
+            signals = df.copy()
+            signals["signal_entry"] = [True, False, False]
+            signals["signal_exit"] = False
+            signals["proposed_stop"] = [90.0, 90.0, 90.0]
+            signals["ind_atr"] = [2.0, 10.0, 10.0]
+            return signals
+
+        monkeypatch.setattr(
+            "nse_algo.backtest.engine.generate_all_signals", fake_signals
+        )
+        config = ProjectConfig(
+            capital=CapitalConfig(initial_capital=100_000),
+            risk=RiskConfig(trailing_stop_enabled=True),
+        )
+        result = run_backtest({"TEST": bars}, config=config)
+
+        assert result.n_trades == 1
+        trade = result.trades[0]
+        assert trade.entry_date == dates[1]
+        assert trade.exit_date == dates[2]
+        assert trade.exit_reason == ExitReason.TRAILING_STOP
+        assert trade.exit_price == 101.0
+        expected_buy_costs = calculate_transaction_cost(
+            trade.quantity, trade.entry_price, is_buy=True
+        ).total_cost
+        expected_sell_costs = calculate_transaction_cost(
+            trade.quantity, trade.exit_price, is_buy=False
+        ).total_cost
+        assert np.isclose(trade.costs, expected_buy_costs + expected_sell_costs)
+        assert np.isclose(
+            trade.pnl,
+            trade.quantity * (trade.exit_price - trade.entry_price) - trade.costs,
+        )
+        assert np.isclose(result.final_equity, config.capital.initial_capital + trade.pnl)
+        assert np.isclose(result.equity_curve.iloc[-1], result.final_equity)
+
+    def test_end_of_data_liquidation_updates_final_equity(self, monkeypatch) -> None:
+        dates = pd.bdate_range("2024-01-02", periods=2)
+        bars = pd.DataFrame(
+            {
+                "open": [100.0, 100.0],
+                "high": [101.0, 111.0],
+                "low": [99.0, 99.0],
+                "close": [100.0, 110.0],
+                "volume": [1000, 1000],
+            },
+            index=dates,
+        )
+
+        def fake_signals(df, config):
+            signals = df.copy()
+            signals["signal_entry"] = [True, False]
+            signals["signal_exit"] = False
+            signals["proposed_stop"] = [90.0, 90.0]
+            signals["ind_atr"] = [2.0, 2.0]
+            return signals
+
+        monkeypatch.setattr(
+            "nse_algo.backtest.engine.generate_all_signals", fake_signals
+        )
+        config = ProjectConfig(
+            capital=CapitalConfig(initial_capital=100_000),
+            risk=RiskConfig(trailing_stop_enabled=False),
+        )
+        result = run_backtest({"TEST": bars}, config=config)
+
+        assert result.n_trades == 1
+        trade = result.trades[0]
+        assert trade.exit_reason == ExitReason.END_OF_DATA
+        assert trade.exit_price == 110.0
+        assert np.isclose(result.final_equity, config.capital.initial_capital + trade.pnl)
+        assert np.isclose(result.equity_curve.iloc[-1], result.final_equity)
+
+    def test_entry_day_stop_is_not_ignored(self, monkeypatch) -> None:
+        dates = pd.bdate_range("2024-01-02", periods=2)
+        bars = pd.DataFrame(
+            {
+                "open": [100.0, 100.0],
+                "high": [101.0, 105.0],
+                "low": [99.0, 80.0],
+                "close": [100.0, 95.0],
+                "volume": [1000, 1000],
+            },
+            index=dates,
+        )
+
+        def fake_signals(df, config):
+            signals = df.copy()
+            signals["signal_entry"] = [True, False]
+            signals["signal_exit"] = False
+            signals["proposed_stop"] = [90.0, 90.0]
+            signals["ind_atr"] = [2.0, 2.0]
+            return signals
+
+        monkeypatch.setattr(
+            "nse_algo.backtest.engine.generate_all_signals", fake_signals
+        )
+        result = run_backtest({"TEST": bars})
+
+        assert result.n_trades == 1
+        trade = result.trades[0]
+        assert trade.exit_reason == ExitReason.STOP_LOSS
+        assert trade.entry_date == trade.exit_date == dates[1]
+        assert trade.exit_price == 90.0
+        assert np.isclose(
+            result.final_equity, result.initial_capital + trade.pnl
+        )

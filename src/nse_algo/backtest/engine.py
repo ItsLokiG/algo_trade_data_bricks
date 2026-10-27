@@ -54,6 +54,7 @@ class Position:
     stop_price: float = 0.0
     atr_at_entry: float = 0.0
     highest_close: float = 0.0  # for trailing stop
+    entry_costs: float = 0.0
 
     @property
     def market_value(self) -> float:
@@ -178,6 +179,7 @@ def run_backtest(
         sig_df["signal_entry"] = sig_df["signal_entry"].shift(1).fillna(False)
         sig_df["signal_exit"] = sig_df["signal_exit"].shift(1).fillna(False)
         sig_df["proposed_stop"] = sig_df["proposed_stop"].shift(1)
+        sig_df["ind_atr"] = sig_df["ind_atr"].shift(1)
         signal_data[symbol] = sig_df
 
     # Collect all trading dates
@@ -222,11 +224,10 @@ def run_backtest(
                 exit_reason = ExitReason.SIGNAL_EXIT
                 exit_price = row["open"]  # fill at today's open (signal from prior close)
 
-            # Stop-loss check (low <= stop)
+            # Stops must account for gaps through the trigger price.
             elif pos.stop_price > 0 and row["low"] <= pos.stop_price:
                 exit_reason = ExitReason.STOP_LOSS
-                # Conservative: assume fill at stop price (could be worse with gaps)
-                exit_price = pos.stop_price
+                exit_price = min(float(row["open"]), pos.stop_price)
 
             # Trailing stop check
             elif risk_cfg.trailing_stop_enabled and pos.highest_close > 0:
@@ -235,7 +236,7 @@ def run_backtest(
                 )
                 if row["low"] <= trailing_stop:
                     exit_reason = ExitReason.TRAILING_STOP
-                    exit_price = trailing_stop
+                    exit_price = min(float(row["open"]), trailing_stop)
 
             if exit_reason is not None:
                 symbols_to_close.append((symbol, exit_reason, exit_price))
@@ -265,7 +266,8 @@ def run_backtest(
             # Record trade
             entry_value = pos.quantity * pos.entry_price
             exit_value = pos.quantity * price
-            pnl = exit_value - entry_value - costs.total_cost
+            total_trade_costs = pos.entry_costs + costs.total_cost
+            pnl = exit_value - entry_value - total_trade_costs
             pnl_pct = pnl / entry_value if entry_value > 0 else 0.0
 
             holding_days = i - 0  # approximate
@@ -282,7 +284,7 @@ def run_backtest(
                 quantity=pos.quantity,
                 pnl=pnl,
                 pnl_pct=pnl_pct,
-                costs=costs.total_cost,
+                costs=total_trade_costs,
                 exit_reason=reason,
                 holding_days=holding_days,
             ))
@@ -331,8 +333,16 @@ def run_backtest(
                     continue
 
                 stop = row.get("proposed_stop", fill_price * 0.95)
-                if stop <= 0:
+                if pd.isna(stop) or stop <= 0:
                     stop = fill_price * 0.95
+                if stop >= fill_price:
+                    logger.info(
+                        "Skipping %s entry at %.2f because stop %.2f is not below entry",
+                        symbol,
+                        fill_price,
+                        stop,
+                    )
+                    continue
 
                 atr_val = row.get("ind_atr", 0)
                 if atr_val <= 0 or np.isnan(atr_val):
@@ -393,9 +403,48 @@ def run_backtest(
                     stop_price=stop,
                     atr_at_entry=atr_val,
                     highest_close=row["close"],
+                    entry_costs=buy_costs.total_cost,
                 )
-                logger.debug("Entered %s: %d shares @ %.2f, stop %.2f", symbol, quantity, fill_price, stop)
-                n_open += 1
+                if row["low"] <= stop:
+                    exit_price = min(float(row["open"]), stop)
+                    exit_costs = calculate_transaction_cost(
+                        quantity, exit_price, is_buy=False,
+                        brokerage_pct=cost_cfg.brokerage_pct,
+                        brokerage_cap=cost_cfg.brokerage_cap_per_trade,
+                        stt_pct=cost_cfg.stt_pct,
+                        exchange_txn_pct=cost_cfg.exchange_txn_pct,
+                        gst_pct=cost_cfg.gst_pct,
+                        sebi_pct=cost_cfg.sebi_pct,
+                        stamp_duty_pct=cost_cfg.stamp_duty_pct,
+                        slippage_pct=cost_cfg.slippage_pct,
+                    )
+                    cash += quantity * exit_price - exit_costs.total_cost
+                    total_trade_costs = buy_costs.total_cost + exit_costs.total_cost
+                    pnl = quantity * (exit_price - fill_price) - total_trade_costs
+                    trades.append(Trade(
+                        symbol=symbol,
+                        entry_date=date,
+                        exit_date=date,
+                        entry_price=fill_price,
+                        exit_price=exit_price,
+                        quantity=quantity,
+                        pnl=pnl,
+                        pnl_pct=pnl / (quantity * fill_price),
+                        costs=total_trade_costs,
+                        exit_reason=ExitReason.STOP_LOSS,
+                        holding_days=0,
+                    ))
+                    positions[symbol] = Position(symbol=symbol)
+                    logger.debug(
+                        "Entered and stopped %s on %s: %d shares @ %.2f, stop %.2f",
+                        symbol, date, quantity, fill_price, stop,
+                    )
+                else:
+                    logger.debug(
+                        "Entered %s: %d shares @ %.2f, stop %.2f",
+                        symbol, quantity, fill_price, stop,
+                    )
+                    n_open += 1
                 if n_open >= risk_cfg.max_positions:
                     break
 
@@ -456,8 +505,15 @@ def run_backtest(
             cash += proceeds
             entry_value = pos.quantity * pos.entry_price
             exit_value = pos.quantity * price
-            pnl = exit_value - entry_value - costs.total_cost
+            total_trade_costs = pos.entry_costs + costs.total_cost
+            pnl = exit_value - entry_value - total_trade_costs
             pnl_pct = pnl / entry_value if entry_value > 0 else 0.0
+            holding_days = (
+                len(all_dates[all_dates >= pos.entry_date])
+                - 1
+                if pos.entry_date is not None
+                else 0
+            )
             trades.append(Trade(
                 symbol=symbol,
                 entry_date=pos.entry_date,
@@ -467,10 +523,22 @@ def run_backtest(
                 quantity=pos.quantity,
                 pnl=pnl,
                 pnl_pct=pnl_pct,
-                costs=costs.total_cost,
+                costs=total_trade_costs,
                 exit_reason=ExitReason.END_OF_DATA,
-                holding_days=0,
+                holding_days=holding_days,
             ))
+
+        if equity_history:
+            previous_equity = (
+                equity_history[-2] if len(equity_history) > 1 else initial_capital
+            )
+            equity_history[-1] = cash
+            daily_returns[-1] = (
+                cash / previous_equity - 1.0 if previous_equity > 0 else 0.0
+            )
+            positions_records[-1].update(
+                {"cash": cash, "n_positions": 0, "equity": cash}
+            )
 
     equity_series = pd.Series(equity_history, index=dates_list, name="equity")
     returns_series = pd.Series(daily_returns, index=dates_list, name="daily_return")

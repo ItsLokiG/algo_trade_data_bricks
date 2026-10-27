@@ -122,6 +122,123 @@ class TestPaperEngine:
         assert latest["total_equity"] > 0
         engine.db.close()
 
+    def test_entry_signal_uses_prior_close_and_fills_current_open(self, monkeypatch) -> None:
+        dates = pd.bdate_range("2024-01-02", periods=2)
+        data = {
+            "TEST": pd.DataFrame(
+                {
+                    "open": [95.0, 100.0],
+                    "high": [101.0, 112.0],
+                    "low": [94.0, 99.0],
+                    "close": [100.0, 110.0],
+                    "volume": [1000, 1000],
+                },
+                index=dates,
+            )
+        }
+        signal_dates = []
+
+        def fake_signals(bars, config):
+            signal_dates.append(bars.index[-1])
+            return pd.DataFrame(
+                {
+                    "signal_entry": [True],
+                    "signal_exit": [False],
+                    "proposed_stop": [90.0],
+                    "ind_atr": [2.0],
+                },
+                index=[bars.index[-1]],
+            )
+
+        monkeypatch.setattr("nse_algo.paper.engine.generate_all_signals", fake_signals)
+        engine = PaperEngine(config=ProjectConfig())
+        result = engine.process_day(dates[1], data)
+
+        assert signal_dates == [dates[0]]
+        assert result["new_orders"] == 1
+        fill = engine.db.get_fills()[0]
+        assert fill["fill_price"] == 100.0
+        assert engine.db.get_position("TEST")["entry_price"] == 100.0
+        assert result["positions_value"] == 50 * 110.0
+        engine.db.close()
+
+    def test_gap_through_stop_fills_at_open_and_marks_equity(self, monkeypatch) -> None:
+        dates = pd.bdate_range("2024-01-02", periods=2)
+        data = {
+            "TEST": pd.DataFrame(
+                {
+                    "open": [100.0, 80.0],
+                    "high": [101.0, 86.0],
+                    "low": [99.0, 75.0],
+                    "close": [100.0, 85.0],
+                    "volume": [1000, 1000],
+                },
+                index=dates,
+            )
+        }
+
+        def fake_signals(bars, config):
+            return pd.DataFrame(
+                {
+                    "signal_entry": [False],
+                    "signal_exit": [False],
+                    "proposed_stop": [95.0],
+                    "ind_atr": [2.0],
+                },
+                index=[bars.index[-1]],
+            )
+
+        monkeypatch.setattr("nse_algo.paper.engine.generate_all_signals", fake_signals)
+        engine = PaperEngine(config=ProjectConfig())
+        engine.db.upsert_position("TEST", 10, 100.0, str(dates[0]), 90.0, 100.0)
+        engine.db.insert_equity(str(dates[0]), 99_000.0, 1_000.0, 100_000.0)
+        result = engine.process_day(dates[1], data)
+
+        fill = engine.db.get_fills()[0]
+        assert fill["fill_price"] == 80.0
+        assert engine.db.get_position("TEST")["quantity"] == 0
+        assert result["positions_value"] == 0.0
+        assert result["total_equity"] == result["cash"]
+        engine.db.close()
+
+    def test_entry_day_stop_is_recorded_immediately(self, monkeypatch) -> None:
+        dates = pd.bdate_range("2024-01-02", periods=2)
+        data = {
+            "TEST": pd.DataFrame(
+                {
+                    "open": [100.0, 100.0],
+                    "high": [101.0, 105.0],
+                    "low": [99.0, 80.0],
+                    "close": [100.0, 95.0],
+                    "volume": [1000, 1000],
+                },
+                index=dates,
+            )
+        }
+
+        def fake_signals(bars, config):
+            return pd.DataFrame(
+                {
+                    "signal_entry": [True],
+                    "signal_exit": [False],
+                    "proposed_stop": [90.0],
+                    "ind_atr": [2.0],
+                },
+                index=[bars.index[-1]],
+            )
+
+        monkeypatch.setattr("nse_algo.paper.engine.generate_all_signals", fake_signals)
+        engine = PaperEngine(config=ProjectConfig())
+        result = engine.process_day(dates[1], data)
+
+        fills = engine.db.get_fills()
+        assert result["new_orders"] == 2
+        assert len(fills) == 2
+        assert [fill["fill_price"] for fill in fills] == [100.0, 90.0]
+        assert engine.db.get_position("TEST")["quantity"] == 0
+        assert result["positions_value"] == 0.0
+        engine.db.close()
+
     def test_restart_recovery(self) -> None:
         """Test that state persists across restarts."""
         import tempfile, os

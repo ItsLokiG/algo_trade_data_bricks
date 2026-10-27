@@ -5,6 +5,11 @@ Uses the SyntheticProvider to generate deterministic test data without
 needing internet access or yfinance.
 """
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -54,6 +59,32 @@ class TestSyntheticProvider:
         df1 = p1.fetch_ohlcv("TEST", "2023-01-01", "2023-12-31")
         df2 = p2.fetch_ohlcv("TEST", "2023-01-01", "2023-12-31")
         pd.testing.assert_frame_equal(df1, df2)
+
+    def test_deterministic_across_processes(self) -> None:
+        script = (
+            "from nse_algo.data.providers import SyntheticProvider; "
+            "print(SyntheticProvider(seed=42).fetch_ohlcv("
+            "'TEST', '2023-01-01', '2023-01-10').to_json())"
+        )
+        env = os.environ.copy()
+        source_root = str(Path(__file__).resolve().parents[1] / "src")
+        existing_path = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = os.pathsep.join(
+            part for part in (source_root, existing_path) if part
+        )
+
+        outputs = [
+            subprocess.run(
+                [sys.executable, "-c", script],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            ).stdout
+            for _ in range(2)
+        ]
+
+        assert outputs[0] == outputs[1]
 
     def test_different_symbols_different_data(self) -> None:
         p = SyntheticProvider(seed=42)

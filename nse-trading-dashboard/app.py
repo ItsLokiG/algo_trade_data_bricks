@@ -605,12 +605,13 @@ with tab8:
     st.markdown("---")
     st.subheader("🎯 What It Does")
     st.markdown("""
-    The **NSE Trading Dashboard** is a comprehensive swing trading research platform for Indian stocks.
-    It provides real-time market data, technical analysis, ML-based trade signals, paper trading,
-    news sentiment, and backtested strategy performance — all in one interactive web app.
+    The **NSE Trading Dashboard** is an experimental interface for Indian-stock research.
+    It displays third-party market data, technical indicators, candidate signals, and simulated
+    paper-trading history. Its data is not an exchange-certified live feed, and its strategy
+    performance has not been validated.
     """)
     st.markdown("---")
-    st.subheader("📊 Two Active Strategies")
+    st.subheader("📊 Candidate Strategies — Unvalidated")
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("""
@@ -621,7 +622,7 @@ with tab8:
         - **Entry**: ML top picks + NIFTY bull regime + uptrend (close>SMA50) + RSI 40-70 + ROCE>15%
         - **Exit**: ATR stop (-1.5x), ATR target (+3x), 4-week hold, trend exit
         - **Rebalance**: Weekly (Friday)
-        - **Backtest**: 96.8% return, Sharpe 1.60, Max DD -12.3%
+        - **Performance**: Not validated; no return claim is available
         """)
     with col2:
         st.markdown("""
@@ -632,13 +633,13 @@ with tab8:
         - **Entry**: ML top picks + NIFTY bull regime + uptrend (close>SMA50) + RSI 35-72
         - **Exit**: ATR stop (-1.5x), ATR target (+2x), 10-day hold, trend exit
         - **Rebalance**: Daily
-        - **Backtest**: 71.4% return, Sharpe 1.39, Max DD -13.5%
+        - **Performance**: Not validated; no return claim is available
         """)
     st.markdown("---")
     st.subheader("⚙️ How The Algorithm Works")
     st.markdown("""
-    #### 1. Data Collection
-    - **Price Data**: Daily/weekly OHLCV bars from Yahoo Finance (yfinance) for 224 NSE stocks
+    #### 1. Data Collection (legacy dashboard)
+    - **Price Data**: Daily OHLCV from Yahoo Finance (yfinance); unofficial and not guaranteed real-time
     - **News Sentiment**: Google News RSS feed parsed with VADER sentiment analysis (10 headlines per stock)
     - **Fundamentals**: ROCE, revenue growth, profit growth from Screener.in
     - **NIFTY Regime**: NIFTY 50 daily close vs SMA50 (bull/bear filter)
@@ -649,11 +650,10 @@ with tab8:
     - **Regime**: NIFTY bull/bear, NIFTY momentum, NIFTY volatility
     - **Sentiment**: Avg news sentiment, positive/negative headline counts
     - **Fundamental**: ROCE, revenue growth, profit growth, P/E, P/B
-    #### 3. ML Model (LightGBM)
-    - **Labeling**: Triple-barrier method (De Prado) — upper barrier = +2x volatility, lower = -1x volatility, max 10-day hold
-    - **Training**: 60% train, 10-day purge gap, 30% test (walk-forward)
-    - **Model**: 500 trees, max depth 6, early stopping at 50 rounds
-    - **Output**: Probability of hitting upper barrier (profitable trade)
+    #### 3. ML Model (legacy notebook design)
+    - The notebooks use LightGBM and triple-barrier labels.
+    - Their test period is reused for early stopping, so reported test metrics are not independent.
+    - Predictions and backtest fills require an execution-timing and point-in-time-data rebuild.
     #### 4. Entry Rules (All Must Pass)
     1. NIFTY in bull regime (close > SMA50)
     2. Stock in uptrend (close > SMA50)
@@ -676,17 +676,17 @@ with tab8:
     with st.expander("Is this financial advice?"):
         st.markdown("**No.** This is a research and education tool. All trading is simulated (paper trading). Historical performance does not guarantee future results. Never treat AI-generated signals as proof of future profitability.")
     with st.expander("What data sources are used?"):
-        st.markdown("- **Yahoo Finance** (yfinance): Free daily/weekly OHLCV data for NSE stocks\n- **Google News RSS**: Free news headlines with VADER sentiment analysis\n- **Screener.in**: Fundamental data (ROCE, P/E, revenue/profit growth)\n- **NIFTY 50**: Market regime filter (bull/bear)\nNo paid data feeds are used.")
+        st.markdown("- **Yahoo Finance** (yfinance): Unofficial daily/weekly OHLCV; availability, adjustments, and freshness need validation\n- **Google News RSS**: Headlines scored with VADER\n- **Screener.in**: Fundamental data\n- **Tapetide MCP**: Optional assistant research connection; not wired into this dashboard or Python backtest\nNo source here is treated as an exchange-certified execution feed.")
     with st.expander("What is the ML model's accuracy?"):
-        st.markdown("- **Weekly Swing**: Test AUC = 0.525 (slight edge over random)\n- **Daily Swing**: Test AUC = 0.501 (essentially random)\n- The strategy's edge comes primarily from the **NIFTY regime filter** (keeps us in cash during bear markets) and **ATR-based risk management** (tight stops, asymmetric risk/reward), NOT from ML predictions alone.")
+        st.markdown("The legacy notebooks reported AUC values, but those test metrics are not reliable because the test period was used for early stopping. The dashboard does not currently have a validated model evaluation or established trading edge.")
     with st.expander("Why are there two strategies?"):
-        st.markdown("- **Weekly Swing**: Higher returns (96.8%), higher win rate (61.5%), fewer trades (504). Better for less active traders.\n- **Daily Swing**: More trades (1,204), faster capital recycling (6.1 days avg hold), tighter risk per trade (-4.27% avg loss). Better for active traders.")
+        st.markdown("They are two research prototypes with different bar frequencies. Neither has a validated performance record; choose neither on the basis of the legacy backtest figures.")
     with st.expander("When does the strategy go to cash?"):
         st.markdown("When **NIFTY 50 closes below its 50-day SMA**, the strategy enters BEAR regime and stops buying. All existing positions are managed with stops/targets but no new entries are made. This is the single most important risk management rule.")
     with st.expander("How do I use paper trading?"):
         st.markdown("1. Go to the **Paper Trading** tab to see current positions and trade history\n2. Go to the **Signals** tab to see today's recommended trades\n3. The strategy automatically generates BUY signals when NIFTY is in bull regime\n4. State persists between app restarts (saved in workspace JSON files)\n5. Run the notebook cells to update the ML model and generate fresh signals")
     with st.expander("What are the costs?"):
-        st.markdown("- **App compute**: Billed per hour while RUNNING (MEDIUM size). Stop when not in use.\n- **Data**: All free (yfinance, Google News RSS, Screener.in)\n- **Trading**: No real money is at risk — this is paper trading only")
+        st.markdown("- **App compute**: May be billed while running, depending on deployment\n- **Data**: Provider terms and limits apply\n- **Trading**: This dashboard simulates trades and does not send broker orders")
     with st.expander("Can I use this for real trading?"):
         st.markdown("**Not yet.** Before going live you would need:\n1. Broker API integration (Zerodha Kite, Upstox, Angel One)\n2. Real-time tick data (not daily bars)\n3. Rigorous out-of-sample testing with live paper trading for 3-6 months\n4. Proper order management and slippage modeling\n5. Risk limits and daily loss circuit breakers")
     with st.expander("How accurate is the news sentiment?"):
@@ -700,59 +700,13 @@ with tab8:
 # ─── TAB 9: BACKTEST RESULTS ───
 with tab9:
     st.header("📉 Backtest Results")
-    st.markdown("*Historical performance of both swing trading strategies. Past performance does not guarantee future results.*")
-    st.markdown("---")
-    st.subheader("📊 Strategy Comparison")
-    comp_data = {
-        "Metric": ["Total Return", "CAGR", "Sharpe Ratio", "Max Drawdown", "Win Rate", "Profit Factor", "Total Trades", "Avg Hold Period", "Alpha vs NIFTY"],
-        "Weekly Swing (4-Week)": ["96.8%", "21.6%", "1.60", "-12.3%", "61.5%", "2.16", "504", "3.8 weeks", "+71.0%"],
-        "Daily Swing (10-Day)": ["71.4%", "17.1%", "1.39", "-13.5%", "51.5%", "1.32", "1,204", "6.1 days", "+43.7%"],
-        "NIFTY 50 (Buy & Hold)": ["25.7%", "6.8%", "0.61", "-15.5%", "—", "—", "—", "—", "—"],
-    }
-    st.table(pd.DataFrame(comp_data))
-    st.markdown("---")
-    st.subheader("📈 Weekly Swing Strategy Details")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1: st.metric("Return", "96.8%", "+71.0% vs NIFTY")
-    with col2: st.metric("Sharpe", "1.60", "+0.99 vs NIFTY")
-    with col3: st.metric("Max DD", "-12.3%", "+3.2% vs NIFTY")
-    with col4: st.metric("Win Rate", "61.5%")
-    st.markdown("""
-    - **Period**: May 2023 – Oct 2026 (~3.5 years)
-    - **Universe**: 130 NIFTY 200 stocks
-    - **Features**: 53 (technical + Google News RSS sentiment + Screener.in fundamentals)
-    - **ML**: LightGBM, Test AUC 0.525, Top decile positive rate 28.2%
-    - **Exit Breakdown**: 82% time exits (avg +3%), 9% stop loss (avg -10%), 3% take profit (avg +23%)
-    """)
-    st.markdown("---")
-    st.subheader("📈 Daily Swing Strategy Details")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1: st.metric("Return", "71.4%", "+43.7% vs NIFTY")
-    with col2: st.metric("Sharpe", "1.39", "+0.76 vs NIFTY")
-    with col3: st.metric("Max DD", "-13.5%", "+2.2% vs NIFTY")
-    with col4: st.metric("Win Rate", "51.5%")
-    st.markdown("""
-    - **Period**: Apr 2023 – Oct 2026 (~3.4 years, 860 trading days)
-    - **Universe**: 224 stocks (large + midcap)
-    - **Features**: 37 (technical + cross-sectional + NIFTY regime)
-    - **ML**: LightGBM, Test AUC 0.501, 462K training rows
-    - **Exit Breakdown**: 37% stop loss (avg -4.27%), 37% take profit (avg +5.62%), 24% time exit (avg +0.56%)
-    """)
-    st.markdown("---")
-    st.subheader("📋 Exit Reason Breakdown")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**Weekly Swing Exits**")
-        fig_w = go.Figure(data=[go.Bar(x=["Time Exit", "Stop Loss", "Take Profit", "Trend Exit"], y=[413, 45, 16, 30], marker_color=["#00d4ff", "#ff4444", "#00ff88", "#ff9900"])])
-        fig_w.update_layout(title="Weekly Swing Exit Breakdown", height=300, template="plotly_dark")
-        st.plotly_chart(fig_w, use_container_width=True)
-    with col2:
-        st.markdown("**Daily Swing Exits**")
-        fig_d = go.Figure(data=[go.Bar(x=["Stop Loss", "Take Profit", "Time Exit", "Trend Exit"], y=[451, 448, 291, 14], marker_color=["#ff4444", "#00ff88", "#00d4ff", "#ff9900"])])
-        fig_d.update_layout(title="Daily Swing Exit Breakdown", height=300, template="plotly_dark")
-        st.plotly_chart(fig_d, use_container_width=True)
-    st.markdown("---")
-    st.subheader("📜 Trades Executed by the Algo (Paper Trading)")
+    st.warning(
+        "No validated strategy backtest is available yet. Legacy headline "
+        "returns were removed because the notebooks contain execution-timing, "
+        "validation, and cost-modeling issues. Paper-trade history below is "
+        "simulation output, not proof of profitability."
+    )
+    st.subheader("📜 Legacy Paper-Simulation Trade Log")
     bt_strategy = st.radio("Select strategy", ["Daily Swing", "Weekly Swing"], horizontal=True, key="bt_strategy")
     bt_path = STATE_PATH_DAILY if "Daily" in bt_strategy else STATE_PATH_WEEKLY
     bt_state = load_state(bt_path)

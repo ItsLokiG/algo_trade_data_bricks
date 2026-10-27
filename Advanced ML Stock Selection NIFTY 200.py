@@ -3,6 +3,8 @@
 # MAGIC %md
 # MAGIC # Advanced ML Stock Selection System — NIFTY 200
 # MAGIC
+# MAGIC > **Research prototype only:** the legacy performance estimates are not validated. Same-close execution, test-set early stopping, and non-point-in-time fundamentals invalidate the existing performance claims. Do not use these results as evidence of profitability.
+# MAGIC
 # MAGIC ## Why the Previous ML Approach Failed
 # MAGIC
 # MAGIC Our earlier ML model achieved only **0.48-0.51 AUC** (barely above random). Root causes:
