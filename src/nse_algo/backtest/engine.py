@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 
 from nse_algo.backtest.costs import CostBreakdown, calculate_transaction_cost
-from nse_algo.config import ProjectConfig, RiskConfig
+from nse_algo.config import CostConfig, ProjectConfig, RiskConfig
 from nse_algo.strategy.signals import SignalConfig, generate_all_signals
 
 logger = logging.getLogger(__name__)
@@ -142,6 +142,60 @@ def calculate_position_size(
     return max(quantity, 0)
 
 
+def _close_position(
+    symbol: str,
+    reason: ExitReason,
+    price: float,
+    date: pd.Timestamp,
+    all_dates: pd.DatetimeIndex,
+    positions: dict[str, Position],
+    trades: list[Trade],
+    cash: float,
+    cost_cfg: CostConfig,
+) -> float:
+    """Close a position, record a net round-trip, and return updated cash."""
+    pos = positions[symbol]
+    if not pos.is_open:
+        return cash
+
+    costs = calculate_transaction_cost(
+        pos.quantity, price, is_buy=False,
+        brokerage_pct=cost_cfg.brokerage_pct,
+        brokerage_cap=cost_cfg.brokerage_cap_per_trade,
+        stt_pct=cost_cfg.stt_pct,
+        exchange_txn_pct=cost_cfg.exchange_txn_pct,
+        gst_pct=cost_cfg.gst_pct,
+        sebi_pct=cost_cfg.sebi_pct,
+        stamp_duty_pct=cost_cfg.stamp_duty_pct,
+        slippage_pct=cost_cfg.slippage_pct,
+    )
+    cash += pos.quantity * price - costs.total_cost
+    entry_value = pos.quantity * pos.entry_price
+    total_trade_costs = pos.entry_costs + costs.total_cost
+    pnl = pos.quantity * (price - pos.entry_price) - total_trade_costs
+    holding_days = (
+        int(((all_dates >= pos.entry_date) & (all_dates <= date)).sum())
+        if pos.entry_date is not None
+        else 0
+    )
+    trades.append(Trade(
+        symbol=symbol,
+        entry_date=pos.entry_date,
+        exit_date=date,
+        entry_price=pos.entry_price,
+        exit_price=price,
+        quantity=pos.quantity,
+        pnl=pnl,
+        pnl_pct=pnl / entry_value if entry_value > 0 else 0.0,
+        costs=total_trade_costs,
+        exit_reason=reason,
+        holding_days=holding_days,
+    ))
+    positions[symbol] = Position(symbol=symbol)
+    logger.debug("Exited %s at %.2f (%s)", symbol, price, reason.value)
+    return cash
+
+
 def run_backtest(
     data: dict[str, pd.DataFrame],
     config: ProjectConfig | None = None,
@@ -225,7 +279,7 @@ def run_backtest(
                 exit_price = row["open"]  # fill at today's open (signal from prior close)
 
             # Stops must account for gaps through the trigger price.
-            elif pos.stop_price > 0 and row["low"] <= pos.stop_price:
+            elif pos.stop_price > 0 and row["open"] <= pos.stop_price:
                 exit_reason = ExitReason.STOP_LOSS
                 exit_price = min(float(row["open"]), pos.stop_price)
 
@@ -234,7 +288,7 @@ def run_backtest(
                 trailing_stop = pos.highest_close - (
                     pos.atr_at_entry * risk_cfg.trailing_stop_atr_multiple
                 )
-                if row["low"] <= trailing_stop:
+                if row["open"] <= trailing_stop:
                     exit_reason = ExitReason.TRAILING_STOP
                     exit_price = min(float(row["open"]), trailing_stop)
 
@@ -243,61 +297,31 @@ def run_backtest(
 
         # Execute exits
         for symbol, reason, price in symbols_to_close:
-            pos = positions[symbol]
-            if not pos.is_open:
-                continue
-
-            # Calculate costs for sell
-            costs = calculate_transaction_cost(
-                pos.quantity, price, is_buy=False,
-                brokerage_pct=cost_cfg.brokerage_pct,
-                brokerage_cap=cost_cfg.brokerage_cap_per_trade,
-                stt_pct=cost_cfg.stt_pct,
-                exchange_txn_pct=cost_cfg.exchange_txn_pct,
-                gst_pct=cost_cfg.gst_pct,
-                sebi_pct=cost_cfg.sebi_pct,
-                stamp_duty_pct=cost_cfg.stamp_duty_pct,
-                slippage_pct=cost_cfg.slippage_pct,
+            cash = _close_position(
+                symbol, reason, price, date, all_dates, positions, trades, cash, cost_cfg
             )
 
-            proceeds = pos.quantity * price - costs.total_cost
-            cash += proceeds
-
-            # Record trade
-            entry_value = pos.quantity * pos.entry_price
-            exit_value = pos.quantity * price
-            total_trade_costs = pos.entry_costs + costs.total_cost
-            pnl = exit_value - entry_value - total_trade_costs
-            pnl_pct = pnl / entry_value if entry_value > 0 else 0.0
-
-            holding_days = i - 0  # approximate
-            # Calculate actual holding days
-            if pos.entry_date is not None:
-                holding_days = len(all_dates[all_dates >= pos.entry_date]) - len(all_dates[all_dates > date])
-
-            trades.append(Trade(
-                symbol=symbol,
-                entry_date=pos.entry_date,
-                exit_date=date,
-                entry_price=pos.entry_price,
-                exit_price=price,
-                quantity=pos.quantity,
-                pnl=pnl,
-                pnl_pct=pnl_pct,
-                costs=total_trade_costs,
-                exit_reason=reason,
-                holding_days=holding_days,
-            ))
-
-            positions[symbol] = Position(symbol=symbol)  # reset
-            logger.debug("Exited %s at %.2f (%s)", symbol, price, reason.value)
-
         # --- Check entries ---
-        current_equity = cash + sum(
-            p.quantity * signal_data[s].loc[date, "close"]
-            for s, p in positions.items()
-            if p.is_open and s in signal_data and date in signal_data[s].index
-        )
+        open_exposure = 0.0
+        current_equity = cash
+        for symbol, pos in positions.items():
+            if not pos.is_open:
+                continue
+            df = signal_data.get(symbol)
+            if df is None:
+                continue
+            available_dates = df.index[df.index <= date]
+            if len(available_dates) == 0:
+                continue
+            mark_date = available_dates[-1]
+            mark_price = (
+                float(df.loc[date, "open"])
+                if date in df.index
+                else float(df.loc[mark_date, "close"])
+            )
+            market_value = pos.quantity * mark_price
+            current_equity += market_value
+            open_exposure += market_value
 
         # Drawdown check
         if current_equity < max_equity:
@@ -310,8 +334,6 @@ def run_backtest(
         daily_ret = (current_equity / prev_equity - 1) if prev_equity > 0 else 0.0
         if daily_ret < -risk_cfg.daily_loss_limit_pct:
             new_entry_suspended = True
-
-        max_equity = max(max_equity, current_equity)
 
         n_open = sum(1 for p in positions.values() if p.is_open)
 
@@ -348,7 +370,14 @@ def run_backtest(
                 if atr_val <= 0 or np.isnan(atr_val):
                     atr_val = fill_price * 0.02  # fallback 2%
 
-                max_position_value = current_equity * risk_cfg.max_single_position_pct
+                exposure_capacity = max(
+                    0.0,
+                    current_equity * risk_cfg.max_portfolio_exposure - open_exposure,
+                )
+                max_position_value = min(
+                    current_equity * risk_cfg.max_single_position_pct,
+                    exposure_capacity,
+                )
                 quantity = calculate_position_size(
                     equity=current_equity,
                     entry_price=fill_price,
@@ -361,25 +390,7 @@ def run_backtest(
                 if quantity <= 0:
                     continue
 
-                # Calculate buy costs
-                buy_costs = calculate_transaction_cost(
-                    quantity, fill_price, is_buy=True,
-                    brokerage_pct=cost_cfg.brokerage_pct,
-                    brokerage_cap=cost_cfg.brokerage_cap_per_trade,
-                    stt_pct=cost_cfg.stt_pct,
-                    exchange_txn_pct=cost_cfg.exchange_txn_pct,
-                    gst_pct=cost_cfg.gst_pct,
-                    sebi_pct=cost_cfg.sebi_pct,
-                    stamp_duty_pct=cost_cfg.stamp_duty_pct,
-                    slippage_pct=cost_cfg.slippage_pct,
-                )
-
-                total_cost = quantity * fill_price + buy_costs.total_cost
-                if total_cost > cash:
-                    # Reduce quantity
-                    quantity = int(cash / (fill_price * (1 + cost_cfg.brokerage_pct + cost_cfg.stt_pct + cost_cfg.slippage_pct)))
-                    if quantity <= 0:
-                        continue
+                while quantity > 0:
                     buy_costs = calculate_transaction_cost(
                         quantity, fill_price, is_buy=True,
                         brokerage_pct=cost_cfg.brokerage_pct,
@@ -392,8 +403,20 @@ def run_backtest(
                         slippage_pct=cost_cfg.slippage_pct,
                     )
                     total_cost = quantity * fill_price + buy_costs.total_cost
+                    if total_cost <= cash:
+                        break
+                    affordable_quantity = int(quantity * cash / total_cost)
+                    quantity = min(
+                        affordable_quantity,
+                        quantity - 1 if affordable_quantity >= quantity else affordable_quantity,
+                    )
+
+                if quantity <= 0:
+                    continue
 
                 cash -= total_cost
+                open_exposure += quantity * fill_price
+                current_equity -= buy_costs.total_cost
 
                 positions[symbol] = Position(
                     symbol=symbol,
@@ -402,51 +425,51 @@ def run_backtest(
                     entry_date=date,
                     stop_price=stop,
                     atr_at_entry=atr_val,
-                    highest_close=row["close"],
+                    highest_close=fill_price,
                     entry_costs=buy_costs.total_cost,
                 )
-                if row["low"] <= stop:
-                    exit_price = min(float(row["open"]), stop)
-                    exit_costs = calculate_transaction_cost(
-                        quantity, exit_price, is_buy=False,
-                        brokerage_pct=cost_cfg.brokerage_pct,
-                        brokerage_cap=cost_cfg.brokerage_cap_per_trade,
-                        stt_pct=cost_cfg.stt_pct,
-                        exchange_txn_pct=cost_cfg.exchange_txn_pct,
-                        gst_pct=cost_cfg.gst_pct,
-                        sebi_pct=cost_cfg.sebi_pct,
-                        stamp_duty_pct=cost_cfg.stamp_duty_pct,
-                        slippage_pct=cost_cfg.slippage_pct,
-                    )
-                    cash += quantity * exit_price - exit_costs.total_cost
-                    total_trade_costs = buy_costs.total_cost + exit_costs.total_cost
-                    pnl = quantity * (exit_price - fill_price) - total_trade_costs
-                    trades.append(Trade(
-                        symbol=symbol,
-                        entry_date=date,
-                        exit_date=date,
-                        entry_price=fill_price,
-                        exit_price=exit_price,
-                        quantity=quantity,
-                        pnl=pnl,
-                        pnl_pct=pnl / (quantity * fill_price),
-                        costs=total_trade_costs,
-                        exit_reason=ExitReason.STOP_LOSS,
-                        holding_days=0,
-                    ))
-                    positions[symbol] = Position(symbol=symbol)
-                    logger.debug(
-                        "Entered and stopped %s on %s: %d shares @ %.2f, stop %.2f",
-                        symbol, date, quantity, fill_price, stop,
-                    )
-                else:
-                    logger.debug(
-                        "Entered %s: %d shares @ %.2f, stop %.2f",
-                        symbol, quantity, fill_price, stop,
-                    )
-                    n_open += 1
+                logger.debug(
+                    "Entered %s: %d shares @ %.2f, stop %.2f",
+                    symbol, quantity, fill_price, stop,
+                )
+                n_open += 1
                 if n_open >= risk_cfg.max_positions:
                     break
+
+        # Intraday lows are only known after the open. Process these stops after
+        # open fills so later-in-the-day stop proceeds cannot fund earlier buys.
+        for symbol, pos in list(positions.items()):
+            if not pos.is_open:
+                continue
+            df = signal_data.get(symbol)
+            if df is None or date not in df.index:
+                continue
+            row = df.loc[date]
+            stop_price = pos.stop_price
+            stop_reason = ExitReason.STOP_LOSS
+            if (
+                risk_cfg.trailing_stop_enabled
+                and pos.highest_close > 0
+                and pos.entry_date != date
+            ):
+                trailing_stop = pos.highest_close - (
+                    pos.atr_at_entry * risk_cfg.trailing_stop_atr_multiple
+                )
+                if trailing_stop > stop_price:
+                    stop_price = trailing_stop
+                    stop_reason = ExitReason.TRAILING_STOP
+            if stop_price > 0 and row["low"] <= stop_price:
+                cash = _close_position(
+                    symbol,
+                    stop_reason,
+                    min(float(row["open"]), stop_price),
+                    date,
+                    all_dates,
+                    positions,
+                    trades,
+                    cash,
+                    cost_cfg,
+                )
 
         # --- End of day: update trailing stops and record equity ---
         for symbol, pos in positions.items():
@@ -464,9 +487,16 @@ def run_backtest(
             if not pos.is_open:
                 continue
             df = signal_data.get(symbol)
-            if df is None or date not in df.index:
+            if df is None:
                 continue
-            eod_equity += pos.quantity * df.loc[date, "close"]
+            available_dates = df.index[df.index <= date]
+            if len(available_dates) == 0:
+                continue
+            mark_date = available_dates[-1]
+            eod_equity += pos.quantity * df.loc[mark_date, "close"]
+
+        n_open = sum(1 for p in positions.values() if p.is_open)
+        max_equity = max(max_equity, eod_equity)
 
         equity_history.append(eod_equity)
         daily_returns.append((eod_equity / prev_equity - 1) if prev_equity > 0 else 0.0)
@@ -480,53 +510,30 @@ def run_backtest(
             "equity": eod_equity,
         })
 
-    # --- Close remaining positions at end of data ---
+    # --- Close remaining positions at each symbol's final available close ---
     last_date = all_dates[-1] if len(all_dates) > 0 else None
     if last_date is not None:
         for symbol, pos in positions.items():
             if not pos.is_open:
                 continue
             df = signal_data.get(symbol)
-            if df is None or last_date not in df.index:
+            if df is None:
                 continue
-            price = df.loc[last_date, "close"]
-            costs = calculate_transaction_cost(
-                pos.quantity, price, is_buy=False,
-                brokerage_pct=cost_cfg.brokerage_pct,
-                brokerage_cap=cost_cfg.brokerage_cap_per_trade,
-                stt_pct=cost_cfg.stt_pct,
-                exchange_txn_pct=cost_cfg.exchange_txn_pct,
-                gst_pct=cost_cfg.gst_pct,
-                sebi_pct=cost_cfg.sebi_pct,
-                stamp_duty_pct=cost_cfg.stamp_duty_pct,
-                slippage_pct=cost_cfg.slippage_pct,
+            available_dates = df.index[df.index <= last_date]
+            if len(available_dates) == 0:
+                continue
+            exit_date = available_dates[-1]
+            cash = _close_position(
+                symbol,
+                ExitReason.END_OF_DATA,
+                float(df.loc[exit_date, "close"]),
+                exit_date,
+                all_dates,
+                positions,
+                trades,
+                cash,
+                cost_cfg,
             )
-            proceeds = pos.quantity * price - costs.total_cost
-            cash += proceeds
-            entry_value = pos.quantity * pos.entry_price
-            exit_value = pos.quantity * price
-            total_trade_costs = pos.entry_costs + costs.total_cost
-            pnl = exit_value - entry_value - total_trade_costs
-            pnl_pct = pnl / entry_value if entry_value > 0 else 0.0
-            holding_days = (
-                len(all_dates[all_dates >= pos.entry_date])
-                - 1
-                if pos.entry_date is not None
-                else 0
-            )
-            trades.append(Trade(
-                symbol=symbol,
-                entry_date=pos.entry_date,
-                exit_date=last_date,
-                entry_price=pos.entry_price,
-                exit_price=price,
-                quantity=pos.quantity,
-                pnl=pnl,
-                pnl_pct=pnl_pct,
-                costs=total_trade_costs,
-                exit_reason=ExitReason.END_OF_DATA,
-                holding_days=holding_days,
-            ))
 
         if equity_history:
             previous_equity = (

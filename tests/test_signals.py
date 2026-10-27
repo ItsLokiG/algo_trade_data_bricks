@@ -180,3 +180,44 @@ class TestRankStocks:
         result = rank_stocks(data, min_avg_daily_value=1e12)  # impossibly high
         assert (result["score"] == 0.0).all()
         assert not result["eligible"].any()
+
+    def test_historical_liquidity_ignores_future_bars(self) -> None:
+        dates = pd.bdate_range("2024-01-02", periods=4)
+        data = {
+            "TEST": pd.DataFrame(
+                {
+                    "close": [10.0, 10.0, 1000.0, 1000.0],
+                    "volume": [1, 1, 1000, 1000],
+                    "ind_momentum": [0.1] * 4,
+                    "ind_rel_strength": [1.1] * 4,
+                    "ind_rsi": [55.0] * 4,
+                },
+                index=dates,
+            )
+        }
+
+        result = rank_stocks(data, date=dates[1], min_avg_daily_value=50.0)
+
+        assert result.loc[0, "avg_traded_value"] == 10.0
+        assert not result.loc[0, "eligible"]
+
+    def test_non_session_decision_date_uses_latest_prior_bar(self) -> None:
+        dates = pd.bdate_range("2024-01-02", periods=3)
+        data = {
+            "TEST": pd.DataFrame(
+                {
+                    "close": [10.0, 20.0, 30.0],
+                    "volume": [10, 10, 100],
+                    "ind_momentum": [0.1] * 3,
+                    "ind_rel_strength": [1.1] * 3,
+                    "ind_rsi": [55.0] * 3,
+                },
+                index=dates,
+            )
+        }
+
+        result = rank_stocks(
+            data, date=dates[1] + pd.Timedelta(hours=12), min_avg_daily_value=1000.0
+        )
+
+        assert result.loc[0, "avg_traded_value"] == 150.0

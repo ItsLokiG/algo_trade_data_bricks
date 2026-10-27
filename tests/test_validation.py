@@ -119,6 +119,44 @@ class TestYFinanceProvider:
         assert p.is_official is False
         assert p.name == "yfinance"
 
+    def test_preserves_unadjusted_and_action_data(self) -> None:
+        fields = [
+            "Open", "High", "Low", "Close", "Adj Close", "Volume",
+            "Dividends", "Stock Splits",
+        ]
+        values = [
+            [10.0, 11.0], [12.0, 13.0], [9.0, 10.0], [11.0, 12.0],
+            [10.5, 11.5], [1000, 2000], [0.0, 0.2], [0.0, 0.0],
+        ]
+        frame = pd.DataFrame(
+            {
+                (field, "RELIANCE.NS"): value
+                for field, value in zip(fields, values)
+            },
+            index=pd.to_datetime(["2024-01-02", "2024-01-03"]),
+        )
+        frame.columns = pd.MultiIndex.from_tuples(frame.columns)
+
+        class FakeYahoo:
+            options: dict[str, object] = {}
+
+            def download(self, *args, **kwargs):
+                self.options = kwargs
+                self.requested = args[0]
+                return frame
+
+        p = YFinanceProvider()
+        fake_yahoo = FakeYahoo()
+        p._yf = fake_yahoo
+        p._available = True
+        result = p.fetch_ohlcv("RELIANCE", "2024-01-01", "2024-01-04")
+
+        assert fake_yahoo.requested == "RELIANCE.NS"
+        assert fake_yahoo.options["auto_adjust"] is False
+        assert fake_yahoo.options["actions"] is True
+        assert {"adj_close", "dividends", "stock_splits"} <= set(result.columns)
+        assert result.loc["2024-01-03", "adj_close"] == 11.5
+
     def test_unavailable_raises_on_fetch(self) -> None:
         p = YFinanceProvider()
         if not p.is_available():

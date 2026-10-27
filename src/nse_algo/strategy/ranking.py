@@ -84,24 +84,22 @@ def rank_stocks(
             })
             continue
 
-        # Get the row at the given date (or last row)
+        # Restrict every feature, including liquidity, to information available
+        # by the requested decision date.
         if date is not None:
             target = pd.Timestamp(date)
-            if target not in df.index:
-                # Find the most recent date <= target
-                valid = df.index[df.index <= target]
-                if len(valid) == 0:
-                    rows.append({
-                        "symbol": symbol,
-                        "score": 0.0,
-                        "eligible": False,
-                    })
-                    continue
-                row = df.loc[valid[-1]]
-            else:
-                row = df.loc[target]
+            valid = df.index[df.index <= target]
+            if len(valid) == 0:
+                rows.append({
+                    "symbol": symbol,
+                    "score": 0.0,
+                    "eligible": False,
+                })
+                continue
+            as_of = valid[-1]
         else:
-            row = df.iloc[-1]
+            as_of = df.index[-1]
+        row = df.loc[as_of]
 
         # Extract features
         momentum = row.get("ind_momentum", np.nan)
@@ -112,8 +110,8 @@ def rank_stocks(
         close = df["close"] if "close" in df.columns else pd.Series(dtype=float)
         volume = df["volume"] if "volume" in df.columns else pd.Series(dtype=float)
         if len(close) > 0 and len(volume) > 0:
-            traded_value = (close * volume).rolling(20, min_periods=1).mean()
-            avg_traded_value = float(traded_value.iloc[-1])
+            traded_value = (close * volume).loc[:as_of].tail(20)
+            avg_traded_value = float(traded_value.mean()) if not traded_value.empty else 0.0
         else:
             avg_traded_value = 0.0
 

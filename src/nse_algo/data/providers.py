@@ -17,8 +17,6 @@ from __future__ import annotations
 import hashlib
 import logging
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
-from typing import Protocol
 
 import numpy as np
 import pandas as pd
@@ -110,8 +108,12 @@ to be exchange-quality.  Use only for prototyping.
                 "yfinance is not installed. Run: pip install yfinance"
             )
 
-        # NSE symbols on yfinance need .NS suffix
-        yf_symbol = f"{symbol}.NS" if not symbol.startswith("^") else symbol
+        # Accept both NSE symbols with and without Yahoo's .NS suffix.
+        yf_symbol = (
+            symbol
+            if symbol.startswith("^") or symbol.endswith(".NS")
+            else f"{symbol}.NS"
+        )
 
         logger.info("Fetching %s from yfinance (%s → %s)", yf_symbol, start_date, end_date)
 
@@ -120,7 +122,8 @@ to be exchange-quality.  Use only for prototyping.
                 yf_symbol,
                 start=start_date,
                 end=end_date,
-                auto_adjust=True,
+                auto_adjust=False,
+                actions=True,
                 progress=False,
             )
         except Exception as exc:
@@ -132,21 +135,46 @@ to be exchange-quality.  Use only for prototyping.
                 "Do NOT treat this as valid empty data."
             )
 
-        # Normalise column names to lowercase
-        # Handle yfinance MultiIndex (yfinance >= 1.7.0 returns (Price, Ticker) tuples)
+        # Preserve provider adjustment and corporate-action fields for research.
         if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df.columns = [str(c).lower().strip() for c in df.columns]
+            columns: list[str] = []
+            for column in df.columns:
+                field = next(
+                    (
+                        str(part).lower().strip()
+                        for part in column
+                        if str(part).lower().strip()
+                        in {
+                            "open", "high", "low", "close", "adj close",
+                            "volume", "dividends", "stock splits",
+                        }
+                    ),
+                    "",
+                )
+                columns.append(field)
+            df.columns = columns
+        else:
+            df.columns = [str(column).lower().strip() for column in df.columns]
+
+        df = df.rename(
+            columns={
+                "adj close": "adj_close",
+                "stock splits": "stock_splits",
+            }
+        )
 
         # Keep only OHLCV columns
-        required = {"open", "high", "low", "close", "volume"}
-        missing = required - set(df.columns)
+        required = ("open", "high", "low", "close", "volume")
+        missing = set(required) - set(df.columns)
         if missing:
             raise ProviderError(
                 f"yfinance data for {symbol} missing columns: {missing}"
             )
 
-        df = df[list(required)]
+        optional = ("adj_close", "dividends", "stock_splits")
+        df = df[
+            [column for column in (*required, *optional) if column in df.columns]
+        ]
 
         # Ensure DatetimeIndex
         df.index = pd.to_datetime(df.index)
@@ -156,7 +184,7 @@ to be exchange-quality.  Use only for prototyping.
         df = df.sort_index()
 
         # Drop any rows with NaN in any OHLCV column
-        nan_count = df.isna().any(axis=1).sum()
+        nan_count = df[list(required)].isna().any(axis=1).sum()
         if nan_count > 0:
             logger.warning(
                 "Dropping %d rows with NaN values for %s", nan_count, symbol

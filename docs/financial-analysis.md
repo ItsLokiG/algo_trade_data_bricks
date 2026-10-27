@@ -52,6 +52,27 @@ not be fed into a historical backtest as if it were known at that time.
    results, and the untouched test period. A strong backtest is a reason to
    continue prospective paper trading, not a promise of future profit.
 
+## Evidence for research hypotheses
+
+Published research can motivate a hypothesis, but it does not validate this
+repository's rules or establish future profitability. Maheshwari and Dhankar's
+study of Indian equities reports cross-sectional momentum using monthly
+portfolios over 1997–2013
+([DOI](https://doi.org/10.1108/JAMR-11-2015-0081)). Jegadeesh and Titman's
+classic US-equity study reports winner/loser momentum over multi-month
+formation and holding periods
+([DOI](https://doi.org/10.1111/j.1540-6261.1993.tb04702.x)). Moskowitz, Ooi,
+and Pedersen report time-series momentum across futures markets over roughly
+1–12 month horizons
+([DOI](https://doi.org/10.1016/j.jfineco.2011.11.003)).
+
+These are different effects and markets: cross-sectional momentum ranks stocks
+against one another, whereas time-series momentum compares an asset's own past
+return with zero. The cited evidence is not proof for this project's daily
+signals, current universe, data quality, trading costs, or execution model.
+Survivorship, delistings, implementation costs, and repeated strategy testing
+must be examined before using any result as decision evidence.
+
 ## Use of MCPs and AI assistants
 
 An MCP can help locate filings or retrieve vendor ratios, but its output is

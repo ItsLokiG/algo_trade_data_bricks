@@ -6,7 +6,7 @@ A portable, testable algorithmic trading research platform for **NSE cash-equity
 
 ## Current Phase
 
-**Research prototype:** core modules and 204 tests are available. Strategy profitability has not been established; the legacy strategy notebooks and their historical performance figures are not validated for trading decisions.
+**Research prototype:** core modules and 210 tests are available. Strategy profitability has not been established; the legacy strategy notebooks and their historical performance figures are not validated for trading decisions.
 
 See the [development workflow](#development-phases) below for the full roadmap.
 
@@ -22,6 +22,7 @@ algo_trade_data_bricks/
 │       ├── config.py               # Central configuration (all parameters)
 │       ├── data/
 │       │   ├── __init__.py
+│       │   ├── collection.py        # Timestamped download snapshots and charts
 │       │   ├── providers.py         # DataProvider interface, YFinance, Synthetic
 │       │   └── validation.py        # Data-quality checks (OHLCV validation)
 │       ├── features/
@@ -57,6 +58,8 @@ algo_trade_data_bricks/
 │   ├── test_paper.py               # 19 tests — paper DB + engine
 │   └── test_reporting.py           # 13 tests — reporting + monitoring
 ├── README.md
+├── SECURITY.md
+├── collect_daily_data.py            # Free exploratory daily-data collector
 ├── .gitignore
 └── requirements.txt
 ```
@@ -73,7 +76,7 @@ algo_trade_data_bricks/
 | delta | 4.4.0 |
 | mlflow | 3.12.0 |
 | matplotlib | 3.10.6 |
-| yfinance | NOT INSTALLED (Phase 2 will verify availability) |
+| yfinance | Optional; installed locally as 1.7.0 on 2026-10-27 |
 | duckdb | NOT INSTALLED (future local portability) |
 
 ### Unity Catalog
@@ -135,8 +138,12 @@ cost modeling before its backtest can support a conclusion.
 
 The notebook/dashboard simulations do not submit broker orders. The reusable
 Python paper engine is separate and simulates close-based signals at the next
-session's open. Its corrected execution/accounting behavior is covered by
-tests, but this is not evidence that either candidate strategy is profitable.
+session's open. It processes open-gap exits before entries, intraday stop
+triggers after open fills, and constrains aggregate open market value to the
+configured portfolio-exposure cap. These are simulation conventions, not a
+guarantee of broker settlement or execution behavior. Its accounting and
+execution behavior is covered by tests, but this is not evidence that either
+candidate strategy is profitable.
 
 ### Market-data MCP (optional)
 
@@ -172,6 +179,48 @@ dated exchange filings or a licensed point-in-time dataset. See
 The bridge is not a substitute for the local backtest engine. Do not treat
 assistant-generated calculations, MCP screening output, or vendor claims as
 audited financial statements or validated strategy results.
+
+### Free daily-data collection (exploratory)
+
+The local collector downloads daily bars for a small NSE sample and NIFTY 50
+from Yahoo Finance, saves timestamped CSV snapshots plus SHA-256 manifests,
+validates basic OHLCV quality, and plots close/adjusted-close, volume, 50/200
+session averages, and RSI. Yahoo Finance is unofficial; this is for pipeline
+and visualization checks, not investment decisions or a backtest-ready data
+set. The collector preserves provider-returned `Adj Close`, dividends, and
+splits and does not apply its own adjustment.
+
+Install the optional data dependency if it is missing:
+
+```powershell
+python -m pip install yfinance
+```
+
+From the repository root, collect the default sample from 2019 onward:
+
+```powershell
+python .\collect_daily_data.py
+```
+
+The default symbols are RELIANCE, TCS, HDFCBANK, INFY, ITC, and NIFTY 50. To
+choose other symbols or dates:
+
+```powershell
+python .\collect_daily_data.py --symbols RELIANCE.NS TCS.NS ^NSEI --start 2020-01-01
+```
+
+PowerShell treats `^` literally in this argument. Each run creates a new
+snapshot under `data/raw/yfinance/` with a `manifest.json` and a `charts/`
+subdirectory. These generated datasets are ignored by Git. The manifest
+records provider, retrieval time, requested range, validation results,
+adjustment policy, and hashes. The `end` argument, when specified, is
+exclusive.
+
+Do not pass these files directly to the backtester yet: the backtester does
+not model split/dividend cashflows, and the Yahoo history may be adjusted or
+revised. The manifest deliberately marks each snapshot as not backtest-ready.
+The approximate missing-session check uses weekdays rather than the NSE
+holiday calendar.
 
 ## Running Tests
 
