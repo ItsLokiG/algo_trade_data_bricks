@@ -1,0 +1,30 @@
+{
+  "capital": 1000000.0,
+  "cash": 1000000.0,
+  "holdings": {},
+  "last_close": {},
+  "pending": {
+    "exec_date": null,
+    "syms": [
+      "BHEL",
+      "NATIONALUM",
+      "AUROPHARMA",
+      "DIVISLAB",
+      "HINDCOPPER",
+      "IDEA",
+      "FEDERALBNK",
+      "SAIL",
+      "ADANIENSOL",
+      "TORNTPHARM"
+    ],
+    "inception": true
+  },
+  "trades": [],
+  "equity": [
+    [
+      "2026-10-30",
+      1000000.0
+    ]
+  ],
+  "last_date": "2026-10-30"
+}
