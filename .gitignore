@@ -70,3 +70,6 @@ mlartifacts/
 
 # Paper trading state (runtime, not code)
 *_paper_trade_state.json
+
+# Cached market data (runtime cache, not code)
+data_cache/
